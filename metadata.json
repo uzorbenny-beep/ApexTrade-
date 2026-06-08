@@ -1,0 +1,6 @@
+{
+  "name": "ApexTrade Suite",
+  "description": "Premium multi-asset broker dashboard resembling Robinhood and Exness. Includes precision real-time SVG charting, customizable leverage (up to 500x), open positions, live public chats, institutional copy-trading, and an interactive Gemini-powered AI Market Co-pilot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
