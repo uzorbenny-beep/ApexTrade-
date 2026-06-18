@@ -268,13 +268,76 @@ export default function App() {
     const fetchAndTick = async () => {
       // Fetch live prices from our Express backend
       let liveFeed: Record<string, { currentPrice: number; change24h: number }> = {};
+      let hitLocalSuccess = false;
       try {
         const response = await fetch('/api/prices');
         if (response.ok) {
           liveFeed = await response.json();
+          if (liveFeed && Object.keys(liveFeed).length > 0) {
+            hitLocalSuccess = true;
+          }
         }
       } catch (err) {
         console.warn("Could not retrieve live price feed from server:", err);
+      }
+
+      // If the Express backend didn't supply prices (e.g. static Vercel host without active server/proxy),
+      // we back up with direct browser-side requests to free CORS-enabled APIs (Bybit for cryptos & Exchange Rate open-api for Forex)
+      if (!hitLocalSuccess) {
+        try {
+          // A. Spot cryptos from Bybit
+          const bybitRes = await fetch("https://api.bybit.com/v5/market/tickers?category=spot");
+          if (bybitRes.ok) {
+            const bybitData = await bybitRes.json();
+            if (bybitData && bybitData.retCode === 0 && bybitData.result && bybitData.result.list) {
+              for (const t of bybitData.result.list) {
+                const symbol = t.symbol;
+                if (symbol.endsWith("USDT")) {
+                  const coinId = symbol.replace("USDT", "");
+                  const lastPrice = parseFloat(t.lastPrice);
+                  const changePct = parseFloat(t.price24hPcnt) * 100;
+                  if (!isNaN(lastPrice)) {
+                    liveFeed[coinId] = {
+                      currentPrice: lastPrice,
+                      change24h: !isNaN(changePct) ? changePct : 0
+                    };
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Bybit browser-direct backup fetch failed:", e);
+        }
+
+        try {
+          // B. Direct live Forex rates relative to USD (CORS-friendly, no-auth)
+          const erRes = await fetch("https://open.er-api.com/v6/latest/USD");
+          if (erRes.ok) {
+            const erData = await erRes.json();
+            if (erData && erData.rates) {
+              const rates = erData.rates;
+              
+              const setRate = (assetId: string, value: number, baseRate: number) => {
+                liveFeed[assetId] = {
+                  currentPrice: value,
+                  change24h: ((value - baseRate) / baseRate) * 100
+                };
+              };
+
+              // Setup precise Forex quotes (e.g., EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD)
+              if (rates.EUR) setRate("EURUSD", parseFloat((1 / rates.EUR).toFixed(5)), 1.08645);
+              if (rates.GBP) setRate("GBPUSD", parseFloat((1 / rates.GBP).toFixed(5)), 1.27432);
+              if (rates.JPY) setRate("USDJPY", parseFloat(rates.JPY.toFixed(2)), 156.40);
+              if (rates.AUD) setRate("AUDUSD", parseFloat((1 / rates.AUD).toFixed(5)), 0.6650);
+              if (rates.CAD) setRate("USDCAD", parseFloat(rates.CAD.toFixed(5)), 1.3680);
+              if (rates.CHF) setRate("USDCHF", parseFloat(rates.CHF.toFixed(5)), 0.8845);
+              if (rates.NZD) setRate("NZDUSD", parseFloat((1 / rates.NZD).toFixed(5)), 0.6122);
+            }
+          }
+        } catch (e) {
+          console.warn("Forex browser-direct backup fetch failed:", e);
+        }
       }
 
       // 1. Tick Asset Prices Fluctuations

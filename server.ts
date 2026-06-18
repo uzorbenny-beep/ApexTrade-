@@ -11,6 +11,8 @@ app.use(express.json());
 
 const PORT = 3000;
 
+let lastUpdateTime = 0;
+
 // Initialize Gemini Client lazily and safely
 let aiClient: GoogleGenAI | null = null;
 
@@ -142,6 +144,7 @@ async function updateLivePrices() {
   } catch (err) {
     console.warn("Polling Yahoo Finance live prices warning:", err);
   }
+  lastUpdateTime = Date.now();
 }
 
 // 1. Health check
@@ -150,7 +153,15 @@ app.get("/api/health", (req, res) => {
 });
 
 // Real-time market prices endpoint
-app.get("/api/prices", (req, res) => {
+app.get("/api/prices", async (req, res) => {
+  const now = Date.now();
+  if (now - lastUpdateTime > 2000) {
+    try {
+      await updateLivePrices();
+    } catch (err) {
+      console.warn("On-demand price update failed:", err);
+    }
+  }
   res.json(livePrices);
 });
 
@@ -315,4 +326,8 @@ async function setupServer() {
   });
 }
 
-setupServer();
+if (!process.env.VERCEL) {
+  setupServer();
+}
+
+export default app;
