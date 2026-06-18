@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Asset, Candlestick, Position } from '../types';
 import { Activity, CandlestickChart, Eye, Settings, TrendingUp, ZoomIn, ZoomOut } from 'lucide-react';
 
@@ -16,6 +16,10 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
   const [showRSI, setShowRSI] = useState<boolean>(true);
   const [containerWidth, setContainerWidth] = useState<number>(800);
   
+  // Interactive coordinates & indices for precise OHLCV Tooltips
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Resize observer to keep chart beautifully fluid
@@ -31,6 +35,35 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
   }, []);
 
   const data = asset.history;
+
+  // Sizing helpers for calculations
+  const rsiChartHeight = showRSI ? 80 : 0;
+  const gap = showRSI ? 20 : 0;
+  const totalHeight = 280 + rsiChartHeight + gap + 20 + 20; // mainChartHeight + rsiChartHeight + gap + paddingTop + paddingBottom
+  const drawableWidth = containerWidth - 10 - 75; // containerWidth - paddingLeft - paddingRight
+  const paddingLeft = 10;
+  const paddingRight = 75;
+  const paddingTop = 20;
+  const mainChartHeight = 280;
+
+  // Mouse move handlers resolving the precise hovered candlestick
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement, MouseEvent>) => {
+    if (!containerRef.current || data.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setMousePos({ x, y });
+
+    // Solve back from screen posX to data index i
+    const relativeX = x - paddingLeft;
+    let index = Math.round((relativeX / drawableWidth) * (data.length - 1));
+    index = Math.max(0, Math.min(data.length - 1, index));
+    setHoveredIndex(index);
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredIndex(null);
+  };
 
   // Let's calculate Indicators dynamically
   // 1. Simple Moving Average (SMA 10)
@@ -117,17 +150,6 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
     return values;
   }, [data]);
 
-  // Dimensions of SVG canvas
-  const mainChartHeight = 280;
-  const rsiChartHeight = showRSI ? 80 : 0;
-  const gap = showRSI ? 20 : 0;
-  const paddingRight = 75; // for prices scale labels
-  const paddingLeft = 10;
-  const paddingTop = 20;
-  const paddingBottom = 20;
-
-  const totalHeight = mainChartHeight + rsiChartHeight + gap + paddingTop + paddingBottom;
-
   // Min and Max prices loaded to scale the chart dynamically
   const { minPrice, maxPrice } = useMemo(() => {
     const prices = data.flatMap(c => [c.low, c.high]);
@@ -154,7 +176,6 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
 
   // Scalings helpers
   const svgWidth = containerWidth;
-  const drawableWidth = svgWidth - paddingLeft - paddingRight;
 
   const getX = (index: number) => {
     return paddingLeft + (index / (data.length - 1)) * drawableWidth;
@@ -364,13 +385,45 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
         </div>
       </div>
 
+      {/* Dynamic OHLCV Tick Metadata Strip */}
+      <div className="bg-black/40 border border-white/5 py-2 px-3 mb-2 flex flex-wrap gap-x-4 gap-y-1.5 text-xs font-mono rounded-xl items-center">
+        {hoveredIndex !== null ? (
+          <>
+            <span className="text-indigo-400 font-extrabold shrink-0 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+              HOVER TICK:
+            </span>
+            <span className="text-gray-400">O: <strong className="text-white">${data[hoveredIndex].open.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">H: <strong className="text-emerald-400">${data[hoveredIndex].high.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">L: <strong className="text-rose-450">${data[hoveredIndex].low.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">C: <strong className="text-white">${data[hoveredIndex].close.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">V: <strong className="text-indigo-300">{(data[hoveredIndex].volume || 0).toLocaleString()}</strong></span>
+            <span className="text-gray-500 text-[10px] ml-auto font-sans font-semibold shrink-0">{data[hoveredIndex].time}</span>
+          </>
+        ) : (
+          <>
+            <span className="text-emerald-400 font-extrabold shrink-0 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              LIVE TICK:
+            </span>
+            <span className="text-gray-400">O: <strong className="text-white">${(data[data.length - 1]?.open || asset.currentPrice).toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">H: <strong className="text-emerald-400">${(data[data.length - 1]?.high || asset.currentPrice).toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">L: <strong className="text-rose-450">${(data[data.length - 1]?.low || asset.currentPrice).toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-400">C: <strong className="text-white">${(data[data.length - 1]?.close || asset.currentPrice).toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</strong></span>
+            <span className="text-gray-500 text-[10px] ml-auto font-sans">Hover chart for historical ticks</span>
+          </>
+        )}
+      </div>
+
       {/* SVG Interactive Chart Box */}
       <div className="relative bg-black/45 border border-white/5 rounded-xl overflow-hidden p-1 custom-scrollbar" ref={containerRef} id="trading-chart-canvas">
         <svg 
           width="100%" 
           height={totalHeight} 
           viewBox={`0 0 ${containerWidth} ${totalHeight}`}
-          className="select-none overflow-visible"
+          className="select-none overflow-visible cursor-crosshair"
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
         >
           <defs>
             {/* Emerald Green Gradient */}
@@ -675,7 +728,89 @@ export default function TradingChart({ asset, activePositions, onClosePosition }
               </g>
             );
           })()}
+
+          {/* INTERACTIVE HOVER CROSSHAIRS */}
+          {hoveredIndex !== null && (
+            <g pointerEvents="none" id="hover-crosshairs-group">
+              {/* Vertical line crosshair */}
+              <line
+                x1={getX(hoveredIndex)}
+                y1={paddingTop}
+                x2={getX(hoveredIndex)}
+                y2={paddingTop + mainChartHeight}
+                stroke="#6366f1"
+                strokeWidth={1}
+                strokeDasharray="2 3"
+                opacity={0.7}
+              />
+              
+              {/* Horizontal line crosshair at mouse Y position */}
+              {mousePos.y >= paddingTop && mousePos.y <= paddingTop + mainChartHeight && (
+                <line
+                  x1={paddingLeft}
+                  y1={mousePos.y}
+                  x2={svgWidth - paddingRight}
+                  y2={mousePos.y}
+                  stroke="#6366f1"
+                  strokeWidth={1}
+                  strokeDasharray="2 3"
+                  opacity={0.7}
+                />
+              )}
+
+              {/* Glowing anchor dot at close price of hovered ticker */}
+              <circle
+                cx={getX(hoveredIndex)}
+                cy={getY(data[hoveredIndex].close)}
+                r={4.5}
+                fill={data[hoveredIndex].close >= data[hoveredIndex].open ? '#34d399' : '#f43f5e'}
+                stroke="#ffffff"
+                strokeWidth={1.5}
+              />
+            </g>
+          )}
         </svg>
+
+        {/* INTERACTIVE HOVER OHLCV TOOLTIP OVERLAY */}
+        {hoveredIndex !== null && (
+          <div 
+            className="absolute z-40 pointer-events-none bg-slate-950/95 border border-indigo-500/30 rounded-xl p-3 shadow-2xl flex flex-col gap-1 text-[11px] font-mono min-w-[200px]"
+            style={{
+              left: `${Math.min(containerWidth - 215, Math.max(10, mousePos.x + 15))}px`,
+              top: `${Math.min(totalHeight - 142, Math.max(10, mousePos.y - 120))}px`
+            }}
+            id="chart-hover-tooltip"
+          >
+            <div className="text-gray-400 font-bold border-b border-white/10 pb-1 mb-1 flex justify-between items-center">
+              <span>{data[hoveredIndex].time}</span>
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-sans font-bold ${
+                data[hoveredIndex].close >= data[hoveredIndex].open ? 'bg-emerald-950/80 text-emerald-400' : 'bg-rose-950/80 text-rose-450'
+              }`}>
+                {data[hoveredIndex].close >= data[hoveredIndex].open ? '▲ BULLISH' : '▼ BEARISH'}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-500">OPEN:</span>
+              <span className="text-white font-bold">${data[hoveredIndex].open.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-500">HIGH:</span>
+              <span className="text-emerald-400 font-bold">${data[hoveredIndex].high.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-500">LOW:</span>
+              <span className="text-rose-450 font-bold">${data[hoveredIndex].low.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-500">CLOSE:</span>
+              <span className="text-white font-bold">${data[hoveredIndex].close.toLocaleString(undefined, { minimumFractionDigits: asset.type === 'forex' ? 5 : 2 })}</span>
+            </div>
+            <div className="flex justify-between gap-4 border-t border-white/5 pt-1 mt-0.5">
+              <span className="text-gray-500 font-medium">VOLUME:</span>
+              <span className="text-slate-300 font-bold">{(data[hoveredIndex].volume || 0).toLocaleString()}</span>
+            </div>
+          </div>
+        )}
 
         {/* Legend overlays */}
         <div className="absolute top-3 left-3 flex gap-2 pointer-events-none" id="chart-legend-labels">

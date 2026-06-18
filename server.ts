@@ -11,33 +11,145 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// Initialize Gemini Client safely
-let ai: GoogleGenAI | null = null;
-const api_key = process.env.GEMINI_API_KEY;
+// Initialize Gemini Client lazily and safely
+let aiClient: GoogleGenAI | null = null;
 
-if (api_key && api_key !== "MY_GEMINI_API_KEY") {
-  try {
-    ai = new GoogleGenAI({
-      apiKey: api_key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
+function getGeminiClient(): GoogleGenAI | null {
+  if (aiClient) return aiClient;
+
+  const api_key = process.env.GEMINI_API_KEY;
+  if (api_key && api_key !== "MY_GEMINI_API_KEY" && api_key !== "placeholder") {
+    try {
+      aiClient = new GoogleGenAI({
+        apiKey: api_key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
         }
-      }
-    });
-    console.log("Successfully initialized server-side Gemini client.");
-  } catch (error) {
-    console.warn("Error setting up Gemini client:", error);
+      });
+      console.log("Successfully initialized server-side Gemini client lazily.");
+      return aiClient;
+    } catch (error) {
+      console.warn("Error setting up Gemini client lazily:", error);
+    }
+  } else {
+    console.warn("GEMINI_API_KEY environment variable is not defined or is set to placeholder/default. Entering fallback simulated mode.");
   }
-} else {
-  console.warn("GEMINI_API_KEY environment variable is not defined or is set to placeholder. Operating in simulated fallback mode.");
+  return null;
 }
 
 // REST API Endpoints
 
+interface LivePrice {
+  currentPrice: number;
+  change24h: number;
+}
+
+const livePrices: Record<string, LivePrice> = {
+  BTC: { currentPrice: 68420.50, change24h: 1.97 },
+  ETH: { currentPrice: 3512.40, change24h: 2.70 },
+  SOL: { currentPrice: 154.65, change24h: 4.35 },
+  BNB: { currentPrice: 580.40, change24h: 1.45 },
+  XRP: { currentPrice: 0.5840, change24h: 1.03 },
+  DOGE: { currentPrice: 0.1420, change24h: 2.89 },
+  ADA: { currentPrice: 0.4520, change24h: 0.89 },
+  AVAX: { currentPrice: 32.50, change24h: 4.16 },
+  SUI: { currentPrice: 1.84, change24h: 4.54 },
+  LINK: { currentPrice: 14.85, change24h: -1.65 },
+  TSLA: { currentPrice: 224.80, change24h: -1.53 },
+  AAPL: { currentPrice: 184.25, change24h: 1.18 },
+  NVDA: { currentPrice: 915.20, change24h: 4.95 },
+  MSFT: { currentPrice: 420.50, change24h: 0.55 },
+  AMZN: { currentPrice: 185.30, change24h: 0.71 },
+  META: { currentPrice: 485.20, change24h: -1.06 },
+  GOOGL: { currentPrice: 172.40, change24h: 1.35 },
+  EURUSD: { currentPrice: 1.08645, change24h: 0.12 },
+  GBPUSD: { currentPrice: 1.27432, change24h: -0.33 },
+  USDJPY: { currentPrice: 156.40, change24h: 0.38 },
+  AUDUSD: { currentPrice: 0.6650, change24h: -0.45 },
+  USDCAD: { currentPrice: 1.3680, change24h: 0.22 },
+  XAUUSD: { currentPrice: 2364.50, change24h: 0.57 },
+  UKOIL: { currentPrice: 83.15, change24h: -1.48 },
+  USOIL: { currentPrice: 79.20, change24h: -1.12 },
+  XAGUSD: { currentPrice: 29.50, change24h: 1.37 },
+};
+
+async function updateLivePrices() {
+  // 1. Fetch Bybit Spot Tickers (all USDT crypto pairs)
+  try {
+    const bybitRes = await fetch("https://api.bybit.com/v5/market/tickers?category=spot");
+    const bybitData = await bybitRes.json() as any;
+    if (bybitData && bybitData.retCode === 0 && bybitData.result && bybitData.result.list) {
+      for (const t of bybitData.result.list) {
+        const symbol = t.symbol; // e.g. "BTCUSDT"
+        if (symbol.endsWith("USDT")) {
+          const coinId = symbol.replace("USDT", "");
+          if (livePrices[coinId] !== undefined) {
+            const lastPrice = parseFloat(t.lastPrice);
+            const changePct = parseFloat(t.price24hPcnt) * 100;
+            if (!isNaN(lastPrice)) {
+              livePrices[coinId].currentPrice = lastPrice;
+              if (!isNaN(changePct)) {
+                livePrices[coinId].change24h = changePct;
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Polling Bybit live prices warning:", err);
+  }
+
+  // 2. Fetch Yahoo Finance Stock/Forex/Commodity Tickers in a single batch
+  try {
+    const yahooSymbols = [
+      "TSLA", "AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL",
+      "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X",
+      "GC=F", "BZ=F", "CL=F", "SI=F"
+    ].join(",");
+    
+    const yRes = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSymbols}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+      }
+    });
+    const yData = await yRes.json() as any;
+    if (yData && yData.quoteResponse && yData.quoteResponse.result) {
+      for (const item of yData.quoteResponse.result) {
+        let id = item.symbol;
+        if (id.endsWith("=X")) {
+          id = id.replace("=X", "");
+        }
+        if (id === "GC=F") id = "XAUUSD";
+        if (id === "BZ=F") id = "UKOIL";
+        if (id === "CL=F") id = "USOIL";
+        if (id === "SI=F") id = "XAGUSD";
+
+        if (livePrices[id] !== undefined) {
+          const price = parseFloat(item.regularMarketPrice);
+          const change = parseFloat(item.regularMarketChangePercent || 0);
+          if (!isNaN(price)) {
+            livePrices[id].currentPrice = price;
+            livePrices[id].change24h = change;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Polling Yahoo Finance live prices warning:", err);
+  }
+}
+
 // 1. Health check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", aiEnabled: !!ai });
+  res.json({ status: "ok", aiEnabled: !!getGeminiClient() });
+});
+
+// Real-time market prices endpoint
+app.get("/api/prices", (req, res) => {
+  res.json(livePrices);
 });
 
 // 2. Co-pilot Chat Route
@@ -48,6 +160,7 @@ app.post("/api/gemini/chat", async (req, res) => {
     return res.status(400).json({ error: "Invalid messages format." });
   }
 
+  const ai = getGeminiClient();
   // Fallback system response if API key is not yet set
   if (!ai) {
     const lastUserMessage = messages[messages.length - 1]?.content || "";
@@ -150,6 +263,7 @@ ${errorMessage ? `*Notice: Gemini API status is inactive on this project (${erro
 *   **Recommended Leverage Limit**: Limit to maximum **20x** to shield from standard volatility.`;
   };
 
+  const ai = getGeminiClient();
   if (!ai) {
     return res.json({ report: getFallbackReport(), isMock: true });
   }
@@ -172,6 +286,13 @@ ${errorMessage ? `*Notice: Gemini API status is inactive on this project (${erro
 
 // Vite & Static file handles
 async function setupServer() {
+  // Start the background real-time price tick poller
+  console.log("Starting real-time market price feed synchronizer...");
+  updateLivePrices().catch(err => console.warn("Initial live price synchronisation issue: ", err));
+  setInterval(() => {
+    updateLivePrices().catch(err => console.warn("Background live price synchronization issue: ", err));
+  }, 2000);
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
