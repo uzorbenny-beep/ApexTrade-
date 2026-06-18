@@ -145,12 +145,75 @@ export default function App() {
   const [stopLossInput, setStopLossInput] = useState<string>('');
   const [takeProfitInput, setTakeProfitInput] = useState<string>('');
 
-  // Portfolio positions, copy tracking, logs & social chat
-  const [positions, setPositions] = useState<Position[]>([]);
-  const [copiedTraderIds, setCopiedTraderIds] = useState<string[]>([]);
-  const [copiedAllocations, setCopiedAllocations] = useState<Record<string, number>>({});
-  const [tradeLog, setTradeLog] = useState<TradeLog[]>([]);
+  // Portfolio positions, copy tracking, logs & social chat per user account
+  const [positions, setPositions] = useState<Position[]>(() => {
+    const savedSession = localStorage.getItem('apex_session_user');
+    if (savedSession) {
+      try {
+        const u = JSON.parse(savedSession);
+        if (u.email) {
+          const savedPos = localStorage.getItem(`apex_positions_${u.email.toLowerCase()}`);
+          if (savedPos) return JSON.parse(savedPos);
+        }
+      } catch (err) {}
+    }
+    return [];
+  });
+
+  const [copiedTraderIds, setCopiedTraderIds] = useState<string[]>(() => {
+    const savedSession = localStorage.getItem('apex_session_user');
+    if (savedSession) {
+      try {
+        const u = JSON.parse(savedSession);
+        if (u.email) {
+          const savedCopied = localStorage.getItem(`apex_copied_traders_${u.email.toLowerCase()}`);
+          if (savedCopied) return JSON.parse(savedCopied);
+        }
+      } catch (err) {}
+    }
+    return [];
+  });
+
+  const [copiedAllocations, setCopiedAllocations] = useState<Record<string, number>>(() => {
+    const savedSession = localStorage.getItem('apex_session_user');
+    if (savedSession) {
+      try {
+        const u = JSON.parse(savedSession);
+        if (u.email) {
+          const savedAlloc = localStorage.getItem(`apex_copied_allocations_${u.email.toLowerCase()}`);
+          if (savedAlloc) return JSON.parse(savedAlloc);
+        }
+      } catch (err) {}
+    }
+    return {};
+  });
+
+  const [tradeLog, setTradeLog] = useState<TradeLog[]>(() => {
+    const savedSession = localStorage.getItem('apex_session_user');
+    if (savedSession) {
+      try {
+        const u = JSON.parse(savedSession);
+        if (u.email) {
+          const savedLog = localStorage.getItem(`apex_tradelog_${u.email.toLowerCase()}`);
+          if (savedLog) return JSON.parse(savedLog);
+        }
+      } catch (err) {}
+    }
+    return [];
+  });
+
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialChatMessages);
+
+  // Synchronize all user states to localStorage for persistence across logins and refreshes (for old & new accounts)
+  useEffect(() => {
+    if (userProfile && userProfile.email) {
+      const emailKey = userProfile.email.toLowerCase();
+      localStorage.setItem(`apex_positions_${emailKey}`, JSON.stringify(positions));
+      localStorage.setItem(`apex_copied_traders_${emailKey}`, JSON.stringify(copiedTraderIds));
+      localStorage.setItem(`apex_copied_allocations_${emailKey}`, JSON.stringify(copiedAllocations));
+      localStorage.setItem(`apex_tradelog_${emailKey}`, JSON.stringify(tradeLog));
+    }
+  }, [positions, copiedTraderIds, copiedAllocations, tradeLog, userProfile.email]);
 
   // Interface feedbacks
   const [actionAlert, setActionAlert] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
@@ -200,9 +263,9 @@ export default function App() {
     return (margin / freeMargin) * 100;
   }, [marginInput, freeMargin]);
 
-  // --- MARKET TICK SIMULATION LOOP (1.5s interval) ---
+  // --- MARKET TICK SIMULATION LOOP (1.5s interval + immediate call on load) ---
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const fetchAndTick = async () => {
       // Fetch live prices from our Express backend
       let liveFeed: Record<string, { currentPrice: number; change24h: number }> = {};
       try {
@@ -300,7 +363,10 @@ export default function App() {
           }
         ]);
       }
-    }, 1500);
+    };
+
+    fetchAndTick();
+    const interval = setInterval(fetchAndTick, 1500);
 
     return () => clearInterval(interval);
   }, []);
@@ -939,6 +1005,35 @@ export default function App() {
                     
                     setUserProfile(profile);
                     setBalance(userMatched.balance !== undefined ? userMatched.balance : 10000);
+                    
+                    // Recover account state for positions, trade logs, and copied parameters cleanly
+                    const userEmail = profile.email.toLowerCase();
+                    const savedPosStr = localStorage.getItem(`apex_positions_${userEmail}`);
+                    const savedCopiedStr = localStorage.getItem(`apex_copied_traders_${userEmail}`);
+                    const savedAllocStr = localStorage.getItem(`apex_copied_allocations_${userEmail}`);
+                    const savedLogStr = localStorage.getItem(`apex_tradelog_${userEmail}`);
+                    
+                    try {
+                      setPositions(savedPosStr ? JSON.parse(savedPosStr) : []);
+                    } catch (e) {
+                      setPositions([]);
+                    }
+                    try {
+                      setCopiedTraderIds(savedCopiedStr ? JSON.parse(savedCopiedStr) : []);
+                    } catch (e) {
+                      setCopiedTraderIds([]);
+                    }
+                    try {
+                      setCopiedAllocations(savedAllocStr ? JSON.parse(savedAllocStr) : {});
+                    } catch (e) {
+                      setCopiedAllocations({});
+                    }
+                    try {
+                      setTradeLog(savedLogStr ? JSON.parse(savedLogStr) : []);
+                    } catch (e) {
+                      setTradeLog([]);
+                    }
+
                     setIsLoggedIn(true);
                     triggerAlert('success', `Welcome back, ${profile.displayName}! Connection verified.`);
                   } else {
@@ -1073,8 +1168,20 @@ export default function App() {
 
                   setUserProfile(profile);
                   setBalance(10000);
+                  setPositions([]);
+                  setCopiedTraderIds([]);
+                  setCopiedAllocations({});
+                  setTradeLog([]);
+                  
+                  // Seed fresh configuration data keys in storage for this brand-new account
+                  const newEmailKey = authEmail.toLowerCase();
+                  localStorage.setItem(`apex_positions_${newEmailKey}`, JSON.stringify([]));
+                  localStorage.setItem(`apex_copied_traders_${newEmailKey}`, JSON.stringify([]));
+                  localStorage.setItem(`apex_copied_allocations_${newEmailKey}`, JSON.stringify({}));
+                  localStorage.setItem(`apex_tradelog_${newEmailKey}`, JSON.stringify([]));
+
                   setIsLoggedIn(true);
-                  triggerAlert('success', `Master account launched! Welcome aboard, ${authName}!`);
+                  triggerAlert('success', `Master account launched! Welcome aboard, ${authName}! Connection verified.`);
                 }} className="space-y-4 font-sans">
                   <div>
                     <label className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">Your Full Name</label>

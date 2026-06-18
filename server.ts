@@ -69,6 +69,8 @@ const livePrices: Record<string, LivePrice> = {
   USDJPY: { currentPrice: 156.40, change24h: 0.38 },
   AUDUSD: { currentPrice: 0.6650, change24h: -0.45 },
   USDCAD: { currentPrice: 1.3680, change24h: 0.22 },
+  USDCHF: { currentPrice: 0.88450, change24h: -0.18 },
+  NZDUSD: { currentPrice: 0.61220, change24h: 0.18 },
   XAUUSD: { currentPrice: 2364.50, change24h: 0.57 },
   UKOIL: { currentPrice: 83.15, change24h: -1.48 },
   USOIL: { currentPrice: 79.20, change24h: -1.12 },
@@ -106,7 +108,7 @@ async function updateLivePrices() {
   try {
     const yahooSymbols = [
       "TSLA", "AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL",
-      "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X",
+      "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
       "GC=F", "BZ=F", "CL=F", "SI=F"
     ].join(",");
     
