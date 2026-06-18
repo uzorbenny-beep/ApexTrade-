@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -107,20 +106,21 @@ async function updateLivePrices() {
   }
 
   // 2. Fetch Yahoo Finance Stock/Forex/Commodity Tickers in a single batch
+  let yahooSuccess = false;
   try {
     const yahooSymbols = [
       "TSLA", "AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL",
       "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
       "GC=F", "BZ=F", "CL=F", "SI=F"
-    ].join(",");
+    ];
     
-    const yRes = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSymbols}`, {
+    const yRes = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSymbols.join(",")}`, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
       }
     });
     const yData = await yRes.json() as any;
-    if (yData && yData.quoteResponse && yData.quoteResponse.result) {
+    if (yData && yData.quoteResponse && yData.quoteResponse.result && yData.quoteResponse.result.length > 0) {
       for (const item of yData.quoteResponse.result) {
         let id = item.symbol;
         if (id.endsWith("=X")) {
@@ -140,9 +140,52 @@ async function updateLivePrices() {
           }
         }
       }
+      yahooSuccess = true;
     }
   } catch (err) {
-    console.warn("Polling Yahoo Finance live prices warning:", err);
+    console.warn("Polling Yahoo Finance bulk quote failed, initiating individual chart-based fallback...", err);
+  }
+
+  // Backup: Individual Chart API fetch for ultimate reliability (CORS-friendly on Yahoo's CDN and bypasses session rules)
+  if (!yahooSuccess) {
+    const symbolsMap: Record<string, string> = {
+      "TSLA": "TSLA", "AAPL": "AAPL", "NVDA": "NVDA", "MSFT": "MSFT", "AMZN": "AMZN", "META": "META", "GOOGL": "GOOGL",
+      "EURUSD=X": "EURUSD", "GBPUSD=X": "GBPUSD", "USDJPY=X": "USDJPY", "AUDUSD=X": "AUDUSD", "USDCAD=X": "USDCAD", "USDCHF=X": "USDCHF", "NZDUSD=X": "NZDUSD",
+      "GC=F": "XAUUSD", "BZ=F": "UKOIL", "CL=F": "USOIL", "SI=F": "XAGUSD"
+    };
+
+    try {
+      await Promise.all(Object.keys(symbolsMap).map(async (ySymbol) => {
+        try {
+          const cRes = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ySymbol}`, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+            }
+          });
+          if (cRes.ok) {
+            const cData = await cRes.json() as any;
+            if (cData && cData.chart && cData.chart.result && cData.chart.result[0]) {
+              const meta = cData.chart.result[0].meta;
+              if (meta) {
+                const currentPrice = parseFloat(meta.regularMarketPrice);
+                const prevClose = parseFloat(meta.chartPreviousClose || meta.previousClose);
+                const targetId = symbolsMap[ySymbol];
+                if (livePrices[targetId] !== undefined && !isNaN(currentPrice)) {
+                  livePrices[targetId].currentPrice = currentPrice;
+                  if (!isNaN(prevClose) && prevClose > 0) {
+                    livePrices[targetId].change24h = ((currentPrice - prevClose) / prevClose) * 100;
+                  }
+                }
+              }
+            }
+          }
+        } catch (innerErr) {
+          console.warn(`Fallback Chart API lookup failed for ${ySymbol}:`, innerErr);
+        }
+      }));
+    } catch (promiseAllErr) {
+      console.warn("Fallback Promise.all failed:", promiseAllErr);
+    }
   }
   lastUpdateTime = Date.now();
 }
@@ -307,6 +350,7 @@ async function setupServer() {
   }, 2000);
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
