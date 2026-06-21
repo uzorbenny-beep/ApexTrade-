@@ -94,3 +94,16 @@ export interface UserProfile {
   notificationsEnabled: boolean;
 }
 
+export interface FundingTransaction {
+  id: string;
+  email: string;
+  type: 'deposit' | 'withdrawal';
+  amount: number;
+  method: string;
+  destinationDetails?: string;
+  status: 'pending' | 'approved' | 'declined';
+  comment?: string;
+  timestamp: string;
+}
+
+

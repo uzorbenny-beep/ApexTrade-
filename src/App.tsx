@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Asset, Position, CopyTrader, ChatMessage, TradeLog, AssetType, PriceAlert, UserProfile } from './types';
+import { Asset, Position, CopyTrader, ChatMessage, TradeLog, AssetType, PriceAlert, UserProfile, FundingTransaction } from './types';
 import { initialAssets, initialChatMessages, simulatedRantingUsernames, simulatedRantingTexts } from './data';
 import MetricCards from './components/MetricCards';
 import TradingChart from './components/TradingChart';
 import CopyTradingDirectory from './components/CopyTradingDirectory';
 import CommunityChat from './components/CommunityChat';
 import AICopilot from './components/AICopilot';
+import FundingCenter from './components/FundingCenter';
+import AdminPanel from './components/AdminPanel';
 import { 
   ArrowDownUp, 
   ChevronUp, 
@@ -32,7 +34,9 @@ import {
   LogOut,
   LogIn,
   LayoutDashboard,
-  Star
+  Star,
+  Wallet,
+  ShieldAlert
 } from 'lucide-react';
 
 export default function App() {
@@ -55,7 +59,55 @@ export default function App() {
   const [searchText, setSearchText] = useState<string>('');
 
   // App Layout Screen Switcher
-  const [activeScreen, setActiveScreen] = useState<'trade' | 'dashboard' | 'positions' | 'profile' | 'alerts'>('trade');
+  const [activeScreen, setActiveScreen] = useState<'trade' | 'dashboard' | 'positions' | 'profile' | 'alerts' | 'funding' | 'admin'>('trade');
+
+  // Funding and Administration Overrides State
+  const [registeredUsers, setRegisteredUsers] = useState<any[]>(() => {
+    const list = localStorage.getItem('apex_registered_users');
+    if (list) {
+      try {
+        return JSON.parse(list);
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  const [fundingTransactions, setFundingTransactions] = useState<FundingTransaction[]>(() => {
+    const saved = localStorage.getItem('apex_funding_transactions');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (err) {}
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('apex_funding_transactions', JSON.stringify(fundingTransactions));
+  }, [fundingTransactions]);
+
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, 'pump' | 'dump' | 'normal'>>(() => {
+    const saved = localStorage.getItem('apex_price_overrides');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (err) {}
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    localStorage.setItem('apex_price_overrides', JSON.stringify(priceOverrides));
+  }, [priceOverrides]);
+
+  const reloadRegisteredUsers = () => {
+    const list = localStorage.getItem('apex_registered_users');
+    if (list) {
+      try {
+        setRegisteredUsers(JSON.parse(list));
+      } catch (err) {}
+    }
+  };
 
   // Custom Price Alerts State
   const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>([
@@ -80,8 +132,8 @@ export default function App() {
       try {
         const u = JSON.parse(saved);
         return {
-          email: u.email || 'trader@exness.io',
-          displayName: u.displayName || 'Quantum Bull',
+          email: u.email || '',
+          displayName: u.displayName || '',
           avatarColor: u.avatarColor || 'bg-emerald-600',
           currency: u.currency || 'USD',
           defaultLeverage: u.defaultLeverage || 100,
@@ -90,8 +142,8 @@ export default function App() {
       } catch (err) {}
     }
     return { 
-      email: 'trader@exness.io', 
-      displayName: 'Quantum Bull', 
+      email: '', 
+      displayName: '', 
       avatarColor: 'bg-emerald-600', 
       currency: 'USD', 
       defaultLeverage: 100, 
@@ -99,18 +151,26 @@ export default function App() {
     };
   });
 
-  // Initialize default users mock database in localStorage if empty
+  // Initialize default users database in localStorage if empty and guarantee Master Admin account
   useEffect(() => {
     const list = localStorage.getItem('apex_registered_users');
-    if (!list) {
-      localStorage.setItem('apex_registered_users', JSON.stringify([
-        {
-          email: 'trader@exness.io',
-          password: 'password',
-          displayName: 'Quantum Bull',
-          balance: 10000
-        }
-      ]));
+    let users = [];
+    if (list) {
+      try {
+        users = JSON.parse(list);
+      } catch (err) {}
+    }
+    const hasAdmin = users.some((u: any) => u.email.toLowerCase() === 'admin@apex.io');
+    if (!hasAdmin) {
+      users.push({
+        email: 'admin@apex.io',
+        password: 'adminpassword',
+        displayName: 'Apex Master Admin',
+        balance: 1000000,
+        status: 'Active Verified'
+      });
+      localStorage.setItem('apex_registered_users', JSON.stringify(users));
+      reloadRegisteredUsers();
     }
   }, []);
 
@@ -131,6 +191,7 @@ export default function App() {
             if (idx !== -1) {
               users[idx].balance = balance;
               localStorage.setItem('apex_registered_users', JSON.stringify(users));
+              reloadRegisteredUsers();
             }
           }
         }
@@ -371,6 +432,32 @@ export default function App() {
             change24h = ((newPrice - initialPrice) / initialPrice) * 100;
           }
 
+          // Apply Admin Market manipulation factor
+          let override = false;
+          let trendMode = 'normal';
+          try {
+            const savedOverridesStr = localStorage.getItem('apex_price_overrides');
+            if (savedOverridesStr) {
+              const savedOverrides = JSON.parse(savedOverridesStr);
+              if (savedOverrides && savedOverrides[asset.id]) {
+                override = true;
+                trendMode = savedOverrides[asset.id];
+              }
+            }
+          } catch (e) {}
+
+          if (override && trendMode !== 'normal') {
+            let trendFactor = 1.0;
+            if (trendMode === 'pump') {
+              trendFactor = 1.025; // Rise by 2.5% on every tick
+            } else if (trendMode === 'dump') {
+              trendFactor = 0.975; // Drop by 2.5% on every tick
+            }
+            newPrice = parseFloat((newPrice * trendFactor).toFixed(asset.type === 'forex' ? 5 : 2));
+            const initialPrice = asset.initialPrice;
+            change24h = ((newPrice - initialPrice) / initialPrice) * 100;
+          }
+
           // Update recent candlesticks history (updating last candle Close limit, appending new candle hourly)
           const updatedHistory = [...asset.history];
           const lastCandle = updatedHistory[updatedHistory.length - 1];
@@ -408,32 +495,7 @@ export default function App() {
         })
       );
 
-      // 2. Random simulated community peer chats chatter
-      if (Math.random() < 0.12) {
-        const randomUser = simulatedRantingUsernames[Math.floor(Math.random() * simulatedRantingUsernames.length)];
-        const randomText = simulatedRantingTexts[Math.floor(Math.random() * simulatedRantingTexts.length)];
-        
-        // Randomly link to a random asset
-        const randomAsset = initialAssets[Math.floor(Math.random() * initialAssets.length)];
-        const linkAsset = Math.random() > 0.4 ? { id: randomAsset.id, name: randomAsset.name } : undefined;
-        const linkPnl = Math.random() > 0.5 ? parseFloat((Math.random() * 85).toFixed(1)) : undefined;
-
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        setChatMessages(prev => [
-          ...prev, 
-          {
-            id: `msg-${Date.now()}`,
-            sender: randomUser,
-            avatarColor: `bg-${['emerald', 'blue', 'indigo', 'amber', 'rose', 'purple'][Math.floor(Math.random() * 6)]}-600`,
-            text: randomText,
-            time: timeStr,
-            assetMention: linkAsset,
-            pnlPercentage: linkPnl
-          }
-        ]);
-      }
+      // Real-time market tick system is active
     };
 
     fetchAndTick();
@@ -601,7 +663,7 @@ export default function App() {
       return;
     }
     const newAlert: PriceAlert = {
-      id: `alert-${Date.now()}`,
+      id: `alert-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       assetId,
       targetPrice: price,
       condition,
@@ -655,7 +717,7 @@ export default function App() {
     const sizeUnits = (margin * leverageInput) / selectedAsset.currentPrice;
 
     const newPosition: Position = {
-      id: `pos-${Date.now()}`,
+      id: `pos-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       assetId: selectedAsset.id,
       assetName: selectedAsset.name,
       assetType: selectedAsset.type,
@@ -694,7 +756,7 @@ export default function App() {
     
     // Add transaction to Closed ledger
     setTradeLog(prev => [{
-      id: `log-${Date.now()}`,
+      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       assetId: positionToClose.assetId,
       assetName: positionToClose.assetName,
       side: positionToClose.side,
@@ -868,7 +930,7 @@ export default function App() {
 
     // Instantly append user message to local feed
     const userMsg: ChatMessage = {
-      id: `custom-${Date.now()}`,
+      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       sender: 'Trader (You)',
       avatarColor: 'bg-emerald-500 border-2 border-slate-100',
       isCustomUser: true,
@@ -882,13 +944,210 @@ export default function App() {
   };
 
 
-  // --- CASH WALLET ADJUSTMENTS ---
+  // --- CASH WALLET ADJUSTMENTS & ADMINISTRATION ---
+  const isAdmin = useMemo(() => {
+    const email = userProfile?.email?.toLowerCase() || '';
+    return email.includes('admin') || email === 'uzorbenny51@gmail.com' || localStorage.getItem('apex_admin_mode') === 'true';
+  }, [userProfile.email]);
+
+  // Handle detection of /admin URL path cleanly on startup and session change
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path === '/admin' || path.endsWith('/admin')) {
+      if (isLoggedIn) {
+        if (isAdmin) {
+          setActiveScreen('admin');
+        } else {
+          triggerAlert('error', 'Access Denied: Admin level privilege is required for this area.');
+          setActiveScreen('trade');
+        }
+      } else {
+        setAuthView('login');
+        setAuthEmail('admin@apex.io');
+        triggerAlert('info', 'Secure Admin Portal: Locked. Please authenticate with your master admin password.');
+      }
+    }
+  }, [isLoggedIn, isAdmin]);
+
+  const handleAdjustUserBalance = (email: string, amount: number, absoluteValue?: boolean) => {
+    const listStr = localStorage.getItem('apex_registered_users');
+    if (listStr) {
+      try {
+        const users = JSON.parse(listStr);
+        const idx = users.findIndex((u: any) => u.email.toLowerCase() === email.toLowerCase());
+        if (idx !== -1) {
+          const oldBal = users[idx].balance || 0;
+          const newBal = absoluteValue ? amount : oldBal + amount;
+          users[idx].balance = newBal;
+          localStorage.setItem('apex_registered_users', JSON.stringify(users));
+          reloadRegisteredUsers();
+
+          if (email.toLowerCase() === userProfile.email.toLowerCase()) {
+            setBalance(newBal);
+            const sessionStr = localStorage.getItem('apex_session_user');
+            if (sessionStr) {
+              const sUser = JSON.parse(sessionStr);
+              sUser.balance = newBal;
+              localStorage.setItem('apex_session_user', JSON.stringify(sUser));
+            }
+          }
+          triggerAlert('success', `Balance for ${email} adjusted to $${newBal.toLocaleString()}`);
+        } else {
+          triggerAlert('error', `User ${email} was not found in registered database.`);
+        }
+      } catch (err) {
+        triggerAlert('error', 'Execution fail: balance adjust serialize error.');
+      }
+    }
+  };
+
+  const handleForceCloseUserPosition = (email: string, positionId: string) => {
+    try {
+      const savedPosStr = localStorage.getItem(`apex_positions_${email.toLowerCase()}`);
+      if (savedPosStr) {
+        const currentPositions: Position[] = JSON.parse(savedPosStr);
+        const posToClose = currentPositions.find(p => p.id === positionId);
+        if (posToClose) {
+          const correspondingAsset = assets.find(a => a.id === posToClose.assetId);
+          const currentPrice = correspondingAsset ? correspondingAsset.currentPrice : posToClose.currentPrice;
+          const isUpY = posToClose.side === 'buy';
+          const pnlPercentageFraction = (currentPrice - posToClose.entryPrice) * (isUpY ? 1 : -1) / posToClose.entryPrice;
+          const pnlAmount = pnlPercentageFraction * posToClose.leverage * posToClose.margin;
+
+          const remainingPositions = currentPositions.filter(p => p.id !== positionId);
+          localStorage.setItem(`apex_positions_${email.toLowerCase()}`, JSON.stringify(remainingPositions));
+
+          const savedLogStr = localStorage.getItem(`apex_tradelog_${email.toLowerCase()}`) || '[]';
+          const logs = JSON.parse(savedLogStr);
+          const newLog: TradeLog = {
+            id: `log-${Date.now()}-${Math.random()}`,
+            assetId: posToClose.assetId,
+            assetName: posToClose.assetName,
+            side: posToClose.side,
+            entryPrice: posToClose.entryPrice,
+            exitPrice: currentPrice,
+            sizeUnits: posToClose.sizeUnits,
+            leverage: posToClose.leverage,
+            pnl: pnlAmount,
+            time: new Date().toLocaleTimeString(),
+          };
+          logs.unshift(newLog);
+          localStorage.setItem(`apex_tradelog_${email.toLowerCase()}`, JSON.stringify(logs));
+
+          const usersStr = localStorage.getItem('apex_registered_users') || '[]';
+          const users = JSON.parse(usersStr);
+          const uIdx = users.findIndex((u: any) => u.email.toLowerCase() === email.toLowerCase());
+          if (uIdx !== -1) {
+            users[uIdx].balance = (users[uIdx].balance || 0) + pnlAmount;
+            localStorage.setItem('apex_registered_users', JSON.stringify(users));
+            reloadRegisteredUsers();
+          }
+
+          if (email.toLowerCase() === userProfile.email.toLowerCase()) {
+            setPositions(remainingPositions);
+            setTradeLog(logs);
+            setBalance(prev => prev + pnlAmount);
+          }
+
+          triggerAlert('success', `Force settled position on ${posToClose.assetId}. realized: $${pnlAmount.toFixed(2)}`);
+        }
+      }
+    } catch (e) {
+      triggerAlert('error', 'Execution fail during position closing.');
+    }
+  };
+
+  const handleSetUserStatus = (email: string, status: string) => {
+    const listStr = localStorage.getItem('apex_registered_users');
+    if (listStr) {
+      try {
+        const users = JSON.parse(listStr);
+        const idx = users.findIndex((u: any) => u.email.toLowerCase() === email.toLowerCase());
+        if (idx !== -1) {
+          users[idx].status = status;
+          localStorage.setItem('apex_registered_users', JSON.stringify(users));
+          reloadRegisteredUsers();
+          triggerAlert('success', `User ${email} status modified to ${status}`);
+        }
+      } catch (e) {}
+    }
+  };
+
+  const handleApproveTransaction = (txId: string, comment: string) => {
+    setFundingTransactions(prev => {
+      const updated = prev.map(tx => {
+        if (tx.id === txId && tx.status === 'pending') {
+          const multiplier = tx.type === 'deposit' ? 1 : -1;
+          handleAdjustUserBalance(tx.email, tx.amount * multiplier, false);
+          return { ...tx, status: 'approved', comment };
+        }
+        return tx;
+      });
+      return updated;
+    });
+  };
+
+  const handleDeclineTransaction = (txId: string, comment: string) => {
+    setFundingTransactions(prev => {
+      const updated = prev.map(tx => {
+        if (tx.id === txId && tx.status === 'pending') {
+          return { ...tx, status: 'declined', comment };
+        }
+        return tx;
+      });
+      return updated;
+    });
+  };
+
+  const handleSetPriceOverride = (assetId: string, trendMode: 'pump' | 'dump' | 'normal') => {
+    setPriceOverrides(prev => {
+      const next = { ...prev };
+      if (trendMode === 'normal') {
+        delete next[assetId];
+      } else {
+        next[assetId] = trendMode;
+      }
+      return next;
+    });
+    triggerAlert('info', `Simulating artificial ${trendMode.toUpperCase()} trend multiplier on ${assetId}.`);
+  };
+
+  const handleBroadcastAnnouncement = (text: string) => {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setChatMessages(prev => [
+      ...prev,
+      {
+        id: `announcement-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        sender: '📢 ADMIN ANNOUNCEMENT',
+        avatarColor: 'bg-indigo-700',
+        text,
+        time: timeStr
+      }
+    ]);
+  };
+
+  const handleFundingCenterSubmit = (tx: { type: 'deposit' | 'withdrawal'; amount: number; method: string; destinationDetails: string }) => {
+    const newTx: FundingTransaction = {
+      id: `tx-${Date.now()}-${Math.random()}`,
+      email: userProfile.email,
+      type: tx.type,
+      amount: tx.amount,
+      method: tx.method,
+      destinationDetails: tx.destinationDetails,
+      status: 'pending',
+      timestamp: new Date().toLocaleString()
+    };
+    setFundingTransactions(prev => [newTx, ...prev]);
+    triggerAlert('success', `${tx.type === 'deposit' ? 'Deposit' : 'Withdrawal'} petition submitted to brokers. Settle from Admin tab!`);
+  };
+
   const handleFundDeposit = () => {
     const amt = parseFloat(depositAmount);
     if (isNaN(amt) || amt <= 0) return;
     setBalance(prev => prev + amt);
     setDepositModalOpen(false);
-    triggerAlert('success', `Mock Account Fund Succeeded: Allocated $${amt.toLocaleString()} to ledger.`);
+    triggerAlert('success', `Account Fund Succeeded: Credited $${amt.toLocaleString()} to ledger.`);
   };
 
   const handleFundWithdraw = () => {
@@ -900,7 +1159,7 @@ export default function App() {
     }
     setBalance(prev => prev - amt);
     setDepositModalOpen(false);
-    triggerAlert('success', `Withdrew $${amt.toLocaleString()} mock cash from brokerage wallet.`);
+    triggerAlert('success', `Withdrew $${amt.toLocaleString()} from brokerage account wallet.`);
   };
 
 
@@ -1036,29 +1295,7 @@ export default function App() {
                     } catch (err) {}
                   }
                   
-                  // Ensure default demo user exists
-                  if (users.length === 0) {
-                    users = [
-                      {
-                        email: 'trader@exness.io',
-                        password: 'password',
-                        displayName: 'Quantum Bull',
-                        balance: 10000
-                      }
-                    ];
-                    localStorage.setItem('apex_registered_users', JSON.stringify(users));
-                  }
-                  
                   let userMatched = users.find((u: any) => u.email.toLowerCase() === authEmail.toLowerCase() && u.password === authPassword);
-                  
-                  if (!userMatched && authEmail.toLowerCase() === 'trader@exness.io' && authPassword === 'password') {
-                    userMatched = {
-                      email: 'trader@exness.io',
-                      password: 'password',
-                      displayName: 'Quantum Bull',
-                      balance: 10000
-                    };
-                  }
                   
                   if (userMatched) {
                     const profile = {
@@ -1226,6 +1463,7 @@ export default function App() {
 
                   users.push(newUser);
                   localStorage.setItem('apex_registered_users', JSON.stringify(users));
+                  reloadRegisteredUsers();
 
                   const profile = {
                     email: authEmail,
@@ -1386,6 +1624,16 @@ export default function App() {
             <ArrowDownUp className="w-5 h-5" />
           </button>
           <button 
+            id="nav-btn-funding"
+            onClick={() => setActiveScreen('funding')}
+            title="Funding & Wallet Center"
+            className={`p-3 rounded-xl transition-all cursor-pointer ${
+              activeScreen === 'funding' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Wallet className="w-5 h-5" />
+          </button>
+          <button 
             id="nav-btn-alerts"
             onClick={() => setActiveScreen('alerts')}
             title="Price Alerts"
@@ -1405,6 +1653,19 @@ export default function App() {
           >
             <User className="w-5 h-5" />
           </button>
+          {isAdmin && (
+            <button 
+              id="nav-btn-admin"
+              onClick={() => setActiveScreen('admin')}
+              title="Admin Panel Control Room"
+              className={`p-3 rounded-xl relative transition-all border border-[#9333ea]/20 cursor-pointer ${
+                activeScreen === 'admin' ? 'bg-[#9333ea] text-white shadow-lg shadow-purple-600/20' : 'text-purple-400 hover:text-purple-300 hover:bg-purple-950/20'
+              }`}
+            >
+              <ShieldAlert className="w-5 h-5 animate-pulse" />
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-purple-500" />
+            </button>
+          )}
         </div>
         
         <div 
@@ -1431,57 +1692,63 @@ export default function App() {
         )}
 
         {/* Mobile Header Menu (visible on mobile only) */}
-        <div className="flex md:hidden items-center justify-around w-full bg-[#121212] border border-white/5 rounded-2xl p-1.5 mb-5 shadow-2xl" id="mobile-header-menu">
+        <div className="flex md:hidden items-center justify-around w-full bg-[#121212] border border-white/5 rounded-2xl p-1.5 mb-5 shadow-2xl" id="mobile-header-menu overflow-x-auto">
           <button 
             onClick={() => setActiveScreen('trade')}
-            className={`flex-1 py-1 px-1 rounded-xl text-[9px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+            className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
               activeScreen === 'trade' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
             }`}
           >
-            <TrendingUp className="w-4 h-4" />
+            <TrendingUp className="w-3.5 h-3.5" />
             <span>Trade</span>
           </button>
           <button 
             onClick={() => setActiveScreen('dashboard')}
-            className={`flex-1 py-1 px-1 rounded-xl text-[9px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+            className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
               activeScreen === 'dashboard' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
             }`}
           >
-            <LayoutDashboard className="w-4 h-4" />
+            <LayoutDashboard className="w-3.5 h-3.5" />
             <span>Hub</span>
           </button>
           <button 
             onClick={() => setActiveScreen('positions')}
-            className={`flex-1 py-1 px-1 rounded-xl text-[9px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+            className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
               activeScreen === 'positions' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
             }`}
           >
-            <ArrowDownUp className="w-4 h-4" />
+            <ArrowDownUp className="w-3.5 h-3.5" />
             <span>Portfolio</span>
           </button>
           <button 
-            onClick={() => setActiveScreen('alerts')}
-            className={`flex-1 py-1 px-1 rounded-xl text-[9px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
-              activeScreen === 'alerts' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
+            onClick={() => setActiveScreen('funding')}
+            className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+              activeScreen === 'funding' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
             }`}
           >
-            <div className="relative">
-              <Bell className="w-4 h-4" />
-              {priceAlerts.some(a => !a.isTriggered) && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse border border-[#121212]" />
-              )}
-            </div>
-            <span>Alerts</span>
+            <Wallet className="w-3.5 h-3.5" />
+            <span>Funding</span>
           </button>
           <button 
             onClick={() => setActiveScreen('profile')}
-            className={`flex-1 py-1 px-1 rounded-xl text-[9px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+            className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
               activeScreen === 'profile' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'
             }`}
           >
-            <User className="w-4 h-4" />
+            <User className="w-3.5 h-3.5" />
             <span>Profile</span>
           </button>
+          {isAdmin && (
+            <button 
+              onClick={() => setActiveScreen('admin')}
+              className={`flex-1 py-1 px-1 rounded-xl text-[8px] font-extrabold tracking-wide uppercase transition-all flex flex-col items-center gap-1 cursor-pointer ${
+                activeScreen === 'admin' ? 'bg-[#9333ea] text-white shadow-md' : 'text-purple-400 hover:text-white'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 animate-pulse" />
+              <span>Admin</span>
+            </button>
+          )}
         </div>
 
         {/* NAVIGATION HEADER FORUM */}
@@ -1507,7 +1774,7 @@ export default function App() {
               }}
               className="px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold rounded-xl transition border border-white/10 cursor-pointer shadow-sm"
             >
-              Settle Mock Funds
+              Settle Wallet Balance
             </button>
           </div>
         </header>
@@ -2719,10 +2986,41 @@ export default function App() {
         </div>
       )}
 
-      {/* CASH WALLET MOCK SETTLE FUNDS MODAL DIALOG OVERLAY */}
+      {activeScreen === 'funding' && (
+        <div className="space-y-6 mt-6 animate-fade-in" id="screen-funding">
+          <FundingCenter
+            balance={balance}
+            freeMargin={freeMargin}
+            userProfile={userProfile}
+            fundingTransactions={fundingTransactions}
+            onSubmitTransaction={handleFundingCenterSubmit}
+          />
+        </div>
+      )}
+
+      {activeScreen === 'admin' && isAdmin && (
+        <div className="space-y-6 mt-6 animate-fade-in" id="screen-admin">
+          <AdminPanel
+            assets={assets}
+            registeredUsers={registeredUsers}
+            fundingTransactions={fundingTransactions}
+            userProfile={userProfile}
+            onAdjustUserBalance={handleAdjustUserBalance}
+            onForceCloseUserPosition={handleForceCloseUserPosition}
+            onSetUserStatus={handleSetUserStatus}
+            onApproveTransaction={handleApproveTransaction}
+            onDeclineTransaction={handleDeclineTransaction}
+            onSetPriceOverride={handleSetPriceOverride}
+            onBroadcastAnnouncement={handleBroadcastAnnouncement}
+            priceOverrides={priceOverrides}
+          />
+        </div>
+      )}
+
+      {/* CASH WALLET SETTLE FUNDS MODAL DIALOG OVERLAY */}
       {depositModalOpen && (
         <div className="fixed inset-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#121212] border border-white/5 max-w-sm w-full rounded-2xl p-6 shadow-2xl relative font-sans" id="mock-deposit-modal">
+          <div className="bg-[#121212] border border-white/5 max-w-sm w-full rounded-2xl p-6 shadow-2xl relative font-sans" id="wallet-settle-modal">
             <button
               onClick={() => setDepositModalOpen(false)}
               className="absolute top-4 right-4 text-slate-500 hover:text-white transition cursor-pointer text-lg font-bold"
@@ -2734,8 +3032,8 @@ export default function App() {
               <div className="mx-auto w-11 h-11 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-3">
                 <DollarSign className="w-5 h-5 text-blue-450" />
               </div>
-              <h3 className="font-extrabold text-[#e5e7eb] text-sm">Settle Mock Brokerage Funds</h3>
-              <p className="text-[10px] text-gray-500 mt-1">Practice with virtual tokens before risk strategies.</p>
+              <h3 className="font-extrabold text-[#e5e7eb] text-sm">Settle Brokerage Funds</h3>
+              <p className="text-[10px] text-gray-500 mt-1">Settle cash transactions to modify active trading balances.</p>
             </div>
 
             <div className="mb-4">
@@ -2743,11 +3041,12 @@ export default function App() {
                 Settle amount ($)
               </label>
               <input
-                id="mock-settle-amount-input"
+                id="settle-amount-input"
                 type="number"
                 value={depositAmount}
                 onChange={(e) => setDepositAmount(e.target.value)}
                 className="w-full bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-sm font-mono tracking-tight text-white focus:outline-none focus:border-blue-600 transition-colors"
+                placeholder="Enter settlement amount..."
               />
             </div>
 
@@ -2757,14 +3056,14 @@ export default function App() {
                 onClick={handleFundDeposit}
                 className="py-2.5 bg-blue-600 text-white rounded-xl text-xs hover:bg-blue-500 transition font-bold shadow-lg shadow-blue-500/10 cursor-pointer"
               >
-                Deposit Practice Fund
+                Deposit Funds
               </button>
               <button
                 id="withdraw-action-btn"
                 onClick={handleFundWithdraw}
                 className="py-2.5 bg-rose-600 text-white rounded-xl text-xs hover:bg-rose-500 transition font-bold shadow-lg shadow-rose-500/10 cursor-pointer"
               >
-                Withdraw Practice Fund
+                Withdraw Funds
               </button>
             </div>
           </div>
